@@ -69,4 +69,7 @@ export interface AgentConfig {
   auto: boolean; // deku --auto : enchaîne les actions SAFE sans confirmation
   cwd: string; // racine du projet ciblé
   maxIterations: number;
+  // Profondeur de délégation sous-agent courante (0 = agent principal).
+  // Incrémentée par runSubAgentLoop, jamais définie manuellement en CLI.
+  subagentDepth?: number;
 }
