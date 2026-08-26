@@ -1,7 +1,7 @@
 import type { AgentConfig, Message, ProviderResponse } from "../types";
 import { getProvider } from "../providers";
 import { executeTool, getRuntimeTools, type ConfirmFn } from "../tools";
-import { scanProject, formatProjectContext } from "../context/scanner";
+import { scanProject, formatProjectContext } from "../contexte/scanner";
 import { getProjectMemory, formatProjectMemory } from "../memory/project";
 import { mcpRegistry } from "../mcp/registry";
 import { pluginRegistry } from "../plugins/registry";
