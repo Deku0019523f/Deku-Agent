@@ -17,6 +17,16 @@ import {
   restoreSnapshot,
   formatSnapshotList,
 } from "./snapshots";
+import {
+  spawnSubagentTool,
+  DEFAULT_SUBAGENT_MAX_ITERATIONS,
+  HARD_CAP_SUBAGENT_MAX_ITERATIONS,
+} from "./subagent";
+// Import circulaire assumé avec agent/subagent.ts (qui importe ALL_TOOLS et
+// executeTool d'ici) : sûr car runSubAgentLoop n'est appelée que depuis le
+// corps de executeTool, jamais au chargement du module. Voir le commentaire
+// dans agent/subagent.ts pour le détail.
+import { runSubAgentLoop } from "../agent/subagent";
 
 export const ALL_TOOLS: ToolDefinition[] = [
   readFileTool,
@@ -26,6 +36,7 @@ export const ALL_TOOLS: ToolDefinition[] = [
   grepSearchTool,
   findFilesTool,
   ...GIT_TOOLS,
+  spawnSubagentTool,
 ];
 
 export type ConfirmFn = (
@@ -124,6 +135,22 @@ export async function executeTool(
 
       case "git_rollback": {
         return await handleGitRollback(call, config, confirm);
+      }
+
+      case "spawn_subagent": {
+        const args = call.arguments as { objective: string; max_iterations?: number };
+        const result = await runSubAgentLoop(
+          args.objective,
+          config,
+          confirm,
+          args.max_iterations,
+          HARD_CAP_SUBAGENT_MAX_ITERATIONS,
+          DEFAULT_SUBAGENT_MAX_ITERATIONS
+        );
+        return ok(
+          call,
+          `${result.summary}\n\n[sous-agent: ${result.iterationsUsed} itération(s), ${result.completed ? "conclu" : "non conclu"}]`
+        );
       }
 
       default: {
