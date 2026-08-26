@@ -29,6 +29,7 @@ import {
 import { runSubAgentLoop } from "../agent/subagent";
 import { mcpRegistry, isMcpToolName } from "../mcp/registry";
 import { pluginRegistry, isPluginToolName } from "../plugins/registry";
+import { GITHUB_TOOLS, GITHUB_TOOL_NAMES, isGithubWriteTool, executeGithubTool } from "./github";
 
 export const ALL_TOOLS: ToolDefinition[] = [
   readFileTool,
@@ -38,6 +39,7 @@ export const ALL_TOOLS: ToolDefinition[] = [
   grepSearchTool,
   findFilesTool,
   ...GIT_TOOLS,
+  ...GITHUB_TOOLS,
   spawnSubagentTool,
 ];
 
@@ -166,10 +168,14 @@ export async function executeTool(
         );
       }
 
+
       default: {
         if (GIT_SHELL_TOOL_NAMES.has(call.name)) {
           const command = buildGitCommand(call.name, call.arguments);
           return await executeShellWithPermission(call, command, config, confirm, options);
+        }
+        if (GITHUB_TOOL_NAMES.has(call.name)) {
+          return await handleGithubTool(call, config, confirm);
         }
         if (isMcpToolName(call.name)) {
           const result = await mcpRegistry.callTool(call.name, call.arguments);
@@ -185,6 +191,33 @@ export async function executeTool(
   } catch (e: any) {
     return err(call, e?.message ?? String(e));
   }
+}
+
+/**
+ * Outils github_* : les lectures (list/get) s'exécutent directement, les
+ * écritures (create_issue, comment_issue, create_pr) demandent TOUJOURS
+ * confirmation — même logique que git_rollback restore et les commandes
+ * DANGEROUS, car une issue ou une PR publiée est visible publiquement
+ * même après clôture. Respecte le mode plan (aucun appel réseau).
+ */
+async function handleGithubTool(
+  call: ToolCall,
+  config: AgentConfig,
+  confirm: ConfirmFn
+): Promise<ToolResult> {
+  if (isGithubWriteTool(call.name) && config.mode === "plan") {
+    return ok(call, `[PLAN MODE] Action GitHub proposée (non exécutée): ${call.name}(${JSON.stringify(call.arguments)})`);
+  }
+
+  if (isGithubWriteTool(call.name)) {
+    const allowed = await confirm(
+      `⚠️  Action GitHub publique: ${call.name}(${JSON.stringify(call.arguments)})\nAutoriser ?`
+    );
+    if (!allowed) return ok(call, "Action GitHub refusée par l'utilisateur.");
+  }
+
+  const content = await executeGithubTool(call.name, call.arguments, config.cwd);
+  return ok(call, content);
 }
 
 /**
