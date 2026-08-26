@@ -7,9 +7,16 @@ import {
   executeWriteFile,
   executeListFiles,
 } from "./filesystem";
-import { runCommandTool, runCommand, classifyCommand } from "./terminal";
+import { runCommandTool, runCommand } from "./terminal";
 import { grepSearchTool, findFilesTool, executeGrepSearch, executeFindFiles } from "./search";
-import { GIT_TOOLS, GIT_TOOL_NAMES, buildGitCommand } from "./git";
+import { classifyCommand, isSensitivePath } from "./permissions";
+import { GIT_TOOLS, GIT_SHELL_TOOL_NAMES, buildGitCommand } from "./git";
+import {
+  createSnapshot,
+  listProjectSnapshots,
+  restoreSnapshot,
+  formatSnapshotList,
+} from "./snapshots";
 
 export const ALL_TOOLS: ToolDefinition[] = [
   readFileTool,
@@ -25,15 +32,24 @@ export type ConfirmFn = (
   question: string
 ) => Promise<boolean> | boolean;
 
+export interface ExecuteToolOptions {
+  sessionId?: string | null;
+}
+
 /**
  * Exécute un tool call en respectant la politique de permissions.
  * `confirm` est fourni par le CLI (prompt interactif) — en mode --auto,
  * les commandes SAFE passent sans lui, CONFIRM/DANGEROUS l'appellent quand même.
+ *
+ * V0.5 : un snapshot Git automatique est pris avant toute écriture
+ * effective (write_file) et avant toute commande DANGEROUS approuvée,
+ * pour permettre un rollback via l'outil git_rollback.
  */
 export async function executeTool(
   call: ToolCall,
   config: AgentConfig,
-  confirm: ConfirmFn
+  confirm: ConfirmFn,
+  options: ExecuteToolOptions = {}
 ): Promise<ToolResult> {
   try {
     switch (call.name) {
@@ -53,8 +69,28 @@ export async function executeTool(
             `[PLAN MODE] Écriture simulée (non appliquée): ${args.path}`
           );
         }
+
+        // Fichier sensible (.env, .git/, lockfiles...) : confirmation
+        // obligatoire même en --auto.
+        if (isSensitivePath(args.path)) {
+          const allowed = await confirm(
+            `⚠️  Écriture sur un fichier sensible: "${args.path}"\nAutoriser ?`
+          );
+          if (!allowed) return ok(call, "Écriture refusée par l'utilisateur.");
+        }
+
+        const snapshot = await createSnapshot(
+          config.cwd,
+          `avant write_file: ${args.path}`,
+          "write_file",
+          options.sessionId
+        );
+
         const result = await executeWriteFile(config.cwd, args);
-        return ok(call, result);
+        return ok(
+          call,
+          snapshot ? `${result} (snapshot #${snapshot.id})` : result
+        );
       }
 
       case "list_files": {
@@ -67,7 +103,7 @@ export async function executeTool(
 
       case "run_command": {
         const args = call.arguments as { command: string };
-        return await executeShellWithPermission(call, args.command, config, confirm);
+        return await executeShellWithPermission(call, args.command, config, confirm, options);
       }
 
       case "grep_search": {
@@ -86,10 +122,14 @@ export async function executeTool(
         return ok(call, result);
       }
 
+      case "git_rollback": {
+        return await handleGitRollback(call, config, confirm);
+      }
+
       default: {
-        if (GIT_TOOL_NAMES.has(call.name)) {
+        if (GIT_SHELL_TOOL_NAMES.has(call.name)) {
           const command = buildGitCommand(call.name, call.arguments);
-          return await executeShellWithPermission(call, command, config, confirm);
+          return await executeShellWithPermission(call, command, config, confirm, options);
         }
         return err(call, `Outil inconnu: ${call.name}`);
       }
@@ -100,17 +140,60 @@ export async function executeTool(
 }
 
 /**
+ * git_rollback ne passe pas par le chemin shell générique : 'list' est en
+ * lecture seule (SAFE), 'restore' réécrit le working tree et demande donc
+ * TOUJOURS confirmation, quel que soit --auto (même logique que DANGEROUS).
+ */
+async function handleGitRollback(
+  call: ToolCall,
+  config: AgentConfig,
+  confirm: ConfirmFn
+): Promise<ToolResult> {
+  const args = call.arguments as { action: "list" | "restore"; snapshot_id?: number };
+
+  if (args.action === "list") {
+    const snapshots = await listProjectSnapshots(config.cwd);
+    return ok(call, formatSnapshotList(snapshots));
+  }
+
+  if (args.action === "restore") {
+    if (args.snapshot_id === undefined) {
+      return err(call, "snapshot_id requis pour action='restore' (voir action='list').");
+    }
+    if (config.mode === "plan") {
+      return ok(
+        call,
+        `[PLAN MODE] Restauration proposée (non appliquée): snapshot #${args.snapshot_id}`
+      );
+    }
+
+    const allowed = await confirm(
+      `⚠️  Restaurer le snapshot #${args.snapshot_id} ? Les modifications non commitées ET les fichiers créés depuis seront perdus.`
+    );
+    if (!allowed) return ok(call, "Restauration refusée par l'utilisateur.");
+
+    const result = await restoreSnapshot(config.cwd, args.snapshot_id);
+    if (!result.ok) return err(call, result.error);
+    return ok(call, `Working tree restauré: "${result.label}" (snapshot #${args.snapshot_id})`);
+  }
+
+  return err(call, `Action git_rollback inconnue: ${(args as any).action}`);
+}
+
+/**
  * Chemin d'exécution partagé par run_command ET les outils git_* :
  * classification SAFE/CONFIRM/DANGEROUS, respect du mode plan,
- * demande de confirmation si nécessaire, puis exécution.
+ * demande de confirmation si nécessaire, snapshot avant exécution
+ * des commandes DANGEROUS approuvées, puis exécution.
  */
 async function executeShellWithPermission(
   call: ToolCall,
   command: string,
   config: AgentConfig,
-  confirm: ConfirmFn
+  confirm: ConfirmFn,
+  options: ExecuteToolOptions
 ): Promise<ToolResult> {
-  const level = classifyCommand(command);
+  const level = classifyCommand(command, config.cwd);
 
   if (config.mode === "plan") {
     return ok(call, `[PLAN MODE] Commande proposée (non exécutée): ${command} [${level}]`);
@@ -119,6 +202,8 @@ async function executeShellWithPermission(
   if (level === "DANGEROUS") {
     const allowed = await confirm(`⚠️  Commande DANGEROUS: "${command}"\nAutoriser ?`);
     if (!allowed) return ok(call, "Commande refusée par l'utilisateur.");
+    // Snapshot juste avant d'exécuter une commande destructive approuvée.
+    await createSnapshot(config.cwd, `avant commande DANGEROUS: ${command}`, "dangerous_command", options.sessionId);
   } else if (level === "CONFIRM") {
     const allowed = await confirm(`Autoriser: "${command}" ?`);
     if (!allowed) return ok(call, "Commande refusée par l'utilisateur.");
