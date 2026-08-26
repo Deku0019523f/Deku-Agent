@@ -50,8 +50,19 @@ export async function getDb(): Promise<Database> {
       PRIMARY KEY (project_path, key)
     );
 
+    CREATE TABLE IF NOT EXISTS snapshots (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      project_path TEXT NOT NULL,
+      session_id TEXT,
+      commit_hash TEXT NOT NULL,
+      label TEXT NOT NULL,
+      trigger TEXT NOT NULL,
+      created_at INTEGER NOT NULL
+    );
+
     CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project_path);
     CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id);
+    CREATE INDEX IF NOT EXISTS idx_snapshots_project ON snapshots(project_path, created_at DESC);
   `);
 
   return db;

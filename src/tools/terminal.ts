@@ -26,13 +26,15 @@ export interface RunCommandResult {
 export function runCommand(
   cwd: string,
   command: string,
-  timeoutMs = 60_000
+  timeoutMs = 60_000,
+  env?: Record<string, string | undefined>
 ): Promise<RunCommandResult> {
   return new Promise((resolve, reject) => {
     const child = spawn(command, {
       cwd,
       shell: true,
       timeout: timeoutMs,
+      env: env ? { ...process.env, ...env } : process.env,
     });
 
     let stdout = "";

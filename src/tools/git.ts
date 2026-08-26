@@ -97,12 +97,39 @@ export function buildGitCommand(name: string, args: Record<string, unknown>): st
   }
 }
 
+export const gitRollbackTool: ToolDefinition = {
+  name: "git_rollback",
+  description:
+    "Liste les snapshots automatiques du projet, ou restaure le working tree à l'état " +
+    "d'un snapshot précis (action destructive sur les modifications non commitées). " +
+    "Un snapshot est créé automatiquement avant chaque write_file et chaque commande DANGEROUS.",
+  parameters: {
+    type: "object",
+    properties: {
+      action: { type: "string", description: "'list' ou 'restore'", enum: ["list", "restore"] },
+      snapshot_id: {
+        type: "number",
+        description: "Id du snapshot à restaurer (requis si action='restore', voir 'list')",
+      },
+    },
+    required: ["action"],
+  },
+};
+
+// Note : git_rollback n'a PAS d'entrée dans buildGitCommand — sa logique
+// (lookup DB + git read-tree) est gérée directement dans tools/index.ts,
+// car elle ne se réduit pas à une simple commande shell classifiable.
+
 export const GIT_TOOLS: ToolDefinition[] = [
   gitStatusTool,
   gitDiffTool,
   gitLogTool,
   gitCommitTool,
   gitBranchTool,
+  gitRollbackTool,
 ];
 
 export const GIT_TOOL_NAMES = new Set(GIT_TOOLS.map((t) => t.name));
+export const GIT_SHELL_TOOL_NAMES = new Set(
+  GIT_TOOLS.filter((t) => t.name !== "git_rollback").map((t) => t.name)
+);

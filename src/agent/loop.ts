@@ -117,7 +117,7 @@ export async function runAgentLoop(
       for (const call of response.message.tool_calls) {
         emit({ type: "tool_call", payload: call });
 
-        const result = await executeTool(call, config, confirm);
+        const result = await executeTool(call, config, confirm, { sessionId });
         emit({ type: "tool_result", payload: result });
 
         const toolMessage: Message = {

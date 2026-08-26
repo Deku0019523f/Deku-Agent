@@ -5,6 +5,7 @@ import * as readline from "node:readline/promises";
 import { resolve } from "node:path";
 import { runAgentLoop, type AgentEvent } from "./agent/loop";
 import { findResumableSession } from "./memory/sessions";
+import { listProjectSnapshots, restoreSnapshot, formatSnapshotList } from "./tools/snapshots";
 import type { ProviderId } from "./providers";
 import type { AgentConfig } from "./types";
 
@@ -21,7 +22,38 @@ program
   .option("--auto", "Enchaîne les actions SAFE sans confirmation", false)
   .option("--max-iterations <n>", "Limite d'itérations de la boucle", "25")
   .option("--resume", "Reprendre la dernière session interrompue sur ce projet", false)
+  .option("--list-snapshots", "Liste les snapshots Git du projet et quitte (pas d'agent)", false)
+  .option("--rollback <id>", "Restaure le working tree à l'état du snapshot <id> et quitte")
   .action(async (objectifArg, opts) => {
+    const cwd = resolve(opts.cwd);
+
+    if (opts.listSnapshots) {
+      const snapshots = await listProjectSnapshots(cwd);
+      console.log(formatSnapshotList(snapshots));
+      return;
+    }
+
+    if (opts.rollback) {
+      const id = parseInt(opts.rollback, 10);
+      const rlConfirm = readline.createInterface({ input: process.stdin, output: process.stdout });
+      const answer = await rlConfirm.question(
+        chalk.yellow(`⚠️  Restaurer le snapshot #${id} ? Modifications non commitées et fichiers créés depuis seront perdus. (o/N) `)
+      );
+      rlConfirm.close();
+      if (answer.trim().toLowerCase() !== "o") {
+        console.log(chalk.dim("Annulé."));
+        return;
+      }
+      const result = await restoreSnapshot(cwd, id);
+      if (result.ok) {
+        console.log(chalk.green(`✓ Working tree restauré: "${result.label}" (snapshot #${id})`));
+      } else {
+        console.log(chalk.red(`✗ ${result.error}`));
+        process.exitCode = 1;
+      }
+      return;
+    }
+
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 
     const objectif =
