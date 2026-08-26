@@ -1,8 +1,10 @@
 import type { AgentConfig, Message, ProviderResponse } from "../types";
 import { getProvider } from "../providers";
-import { ALL_TOOLS, executeTool, type ConfirmFn } from "../tools";
+import { executeTool, getRuntimeTools, type ConfirmFn } from "../tools";
 import { scanProject, formatProjectContext } from "../context/scanner";
 import { getProjectMemory, formatProjectMemory } from "../memory/project";
+import { mcpRegistry } from "../mcp/registry";
+import { pluginRegistry } from "../plugins/registry";
 import {
   createSession,
   endSession,
@@ -17,6 +19,7 @@ export interface AgentEvent {
     | "assistant_text"
     | "tool_call"
     | "tool_result"
+    | "warning"
     | "done"
     | "error";
   payload: unknown;
@@ -162,6 +165,37 @@ export async function runAgentLoop(
     getProjectMemory(config.cwd),
   ]);
 
+  // Connexion MCP + chargement plugins (V1.0), une fois pour tout le run
+  // (agent principal + sous-agents délégués qui réutilisent le même
+  // registre singleton). Un serveur/plugin cassé est journalisé en
+  // "warning" et simplement absent des outils — jamais fatal au démarrage.
+  emit({ type: "thinking", payload: { phase: "extensions" } });
+  const [mcpWarnings, pluginWarnings] = await Promise.all([
+    mcpRegistry.connectAll(config.cwd),
+    pluginRegistry.loadAll(config.cwd),
+  ]);
+  for (const warning of [...mcpWarnings, ...pluginWarnings]) {
+    emit({ type: "warning", payload: warning });
+  }
+
+  try {
+    await runAgentLoopInner(objective, config, confirm, emit, provider, projectContext, projectMemory, options);
+  } finally {
+    await mcpRegistry.disconnectAll();
+    pluginRegistry.reset();
+  }
+}
+
+async function runAgentLoopInner(
+  objective: string,
+  config: AgentConfig,
+  confirm: ConfirmFn,
+  emit: EmitFn,
+  provider: ReturnType<typeof getProvider>,
+  projectContext: Awaited<ReturnType<typeof scanProject>>,
+  projectMemory: Awaited<ReturnType<typeof getProjectMemory>>,
+  options: RunAgentLoopOptions
+): Promise<void> {
   let messages: Message[];
   let sessionId: string;
 
@@ -211,7 +245,7 @@ export async function runAgentLoop(
 
       const response = await sendWithRetry(
         provider,
-        { model: config.model, messages, tools: ALL_TOOLS },
+        { model: config.model, messages, tools: getRuntimeTools() },
         emit
       );
 

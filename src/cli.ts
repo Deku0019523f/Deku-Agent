@@ -123,9 +123,15 @@ function render(event: AgentEvent) {
         );
       } else if (payload?.phase === "stuck") {
         console.log(chalk.red(`● Blocage détecté sur ${payload.tool} (${payload.attempts} échecs identiques)`));
+      } else if (payload?.phase === "extensions") {
+        console.log(chalk.dim("● Connexion MCP / chargement plugins..."));
       } else {
         console.log(chalk.dim("● Réflexion..."));
       }
+      break;
+    }
+    case "warning": {
+      console.log(chalk.yellow(`⚠ ${event.payload}`));
       break;
     }
     case "plan": {

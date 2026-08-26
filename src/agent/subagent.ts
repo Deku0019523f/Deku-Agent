@@ -1,23 +1,23 @@
 import type { AgentConfig, Message } from "../types";
 import { getProvider } from "../providers";
-import { ALL_TOOLS, executeTool, type ConfirmFn } from "../tools";
+import { getRuntimeTools, executeTool, type ConfirmFn } from "../tools";
 import { SUBAGENT_TOOL_NAME, MAX_SUBAGENT_DEPTH } from "../tools/subagent";
 
 /**
- * Le sous-agent voit tous les outils SAUF spawn_subagent — défense en
- * profondeur en plus du check MAX_SUBAGENT_DEPTH : même si la vérification
- * de profondeur venait à changer, un sous-agent ne peut structurellement
- * pas se déléguer lui-même via ses tool definitions.
+ * Le sous-agent voit tous les outils SAUF spawn_subagent (défense en
+ * profondeur en plus du check MAX_SUBAGENT_DEPTH), y compris les outils
+ * MCP et plugins déjà connectés/chargés par le run parent (mêmes registres
+ * singletons, cf. runAgentLoop) — pas de reconnexion par sous-agent.
  *
  * Calculé PARESSEUSEMENT (à l'appel, pas au chargement du module) car
  * agent/subagent.ts <-> tools/index.ts est un import circulaire : au
- * moment où ce module est évalué, ALL_TOOLS de tools/index.ts peut ne
- * pas encore être initialisé (TDZ sur le const). Appeler cette fonction
- * depuis l'intérieur de runSubAgentLoop (donc après le chargement complet
- * des modules) est sûr.
+ * moment où ce module est évalué, les exports de tools/index.ts peuvent
+ * ne pas encore être initialisés (TDZ sur les const). Appeler cette
+ * fonction depuis l'intérieur de runSubAgentLoop (donc après le
+ * chargement complet des modules) est sûr.
  */
 function getSubagentTools() {
-  return ALL_TOOLS.filter((t) => t.name !== SUBAGENT_TOOL_NAME);
+  return getRuntimeTools().filter((t) => t.name !== SUBAGENT_TOOL_NAME);
 }
 
 const SUBAGENT_SYSTEM_PROMPT = (config: AgentConfig) => `Tu es un sous-agent Deku, délégué par un agent parent pour UNE sous-tâche précise et bornée.

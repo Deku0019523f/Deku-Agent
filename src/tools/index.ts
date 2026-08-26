@@ -27,6 +27,8 @@ import {
 // corps de executeTool, jamais au chargement du module. Voir le commentaire
 // dans agent/subagent.ts pour le détail.
 import { runSubAgentLoop } from "../agent/subagent";
+import { mcpRegistry, isMcpToolName } from "../mcp/registry";
+import { pluginRegistry, isPluginToolName } from "../plugins/registry";
 
 export const ALL_TOOLS: ToolDefinition[] = [
   readFileTool,
@@ -38,6 +40,17 @@ export const ALL_TOOLS: ToolDefinition[] = [
   ...GIT_TOOLS,
   spawnSubagentTool,
 ];
+
+/**
+ * Liste d'outils réellement disponible pour CE run : ALL_TOOLS (statique)
+ * + les outils exposés par les serveurs MCP connectés + les outils des
+ * plugins chargés. À appeler après mcpRegistry.connectAll() et
+ * pluginRegistry.loadAll() (fait par runAgentLoop au démarrage) — sinon
+ * ces deux registres sont simplement vides et on retombe sur ALL_TOOLS.
+ */
+export function getRuntimeTools(): ToolDefinition[] {
+  return [...ALL_TOOLS, ...mcpRegistry.getToolDefinitions(), ...pluginRegistry.getToolDefinitions()];
+}
 
 export type ConfirmFn = (
   question: string
@@ -157,6 +170,14 @@ export async function executeTool(
         if (GIT_SHELL_TOOL_NAMES.has(call.name)) {
           const command = buildGitCommand(call.name, call.arguments);
           return await executeShellWithPermission(call, command, config, confirm, options);
+        }
+        if (isMcpToolName(call.name)) {
+          const result = await mcpRegistry.callTool(call.name, call.arguments);
+          return result.isError ? err(call, result.content) : ok(call, result.content);
+        }
+        if (isPluginToolName(call.name)) {
+          const result = await pluginRegistry.callTool(call.name, call.arguments, config.cwd, config);
+          return result.isError ? err(call, result.content) : ok(call, result.content);
         }
         return err(call, `Outil inconnu: ${call.name}`);
       }
