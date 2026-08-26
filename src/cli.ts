@@ -113,9 +113,24 @@ function render(event: AgentEvent) {
       const payload = event.payload as any;
       if (payload?.phase === "scan") {
         console.log(chalk.dim("● Analyse du projet..."));
+      } else if (payload?.phase === "planning") {
+        console.log(chalk.dim("● Élaboration du plan..."));
+      } else if (payload?.phase === "retry") {
+        console.log(
+          chalk.yellow(
+            `● Échec provider (tentative ${payload.attempt}/${payload.maxAttempts}): ${payload.error} — nouvel essai dans ${payload.delayMs}ms`
+          )
+        );
+      } else if (payload?.phase === "stuck") {
+        console.log(chalk.red(`● Blocage détecté sur ${payload.tool} (${payload.attempts} échecs identiques)`));
       } else {
         console.log(chalk.dim("● Réflexion..."));
       }
+      break;
+    }
+    case "plan": {
+      console.log(chalk.bold.blue("\n📋 Plan:"));
+      console.log(`${event.payload}\n`);
       break;
     }
     case "assistant_text":
