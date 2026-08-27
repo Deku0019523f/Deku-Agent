@@ -66,6 +66,49 @@ Alternative sans variable d'environnement : installe [GitHub CLI](https://cli.gi
 
 Ajoute toutes ces lignes à `~/.bashrc` (ou `~/.zshrc`) pour ne pas les retaper à chaque session.
 
+### Configurer une clé API après le lancement (`deku config`)
+
+Alternative aux variables d'environnement : un assistant interactif façon Cline, qui enregistre la clé et laisse choisir le modèle dans le catalogue du provider.
+
+```bash
+deku config
+```
+
+```
+⚙️  Configuration Deku Agent
+
+Quel provider configurer ?
+  1. OpenRouter
+  2. Gemini (Google)
+  3. Groq
+  4. OpenAI
+> 3
+
+Clé API Groq : ****************************
+
+Récupération des modèles disponibles...
+Quel modèle Groq utiliser par défaut ?
+  1. llama-3.3-70b-versatile
+  2. llama-3.1-8b-instant
+  3. mixtral-8x7b-32768
+  ...
+  8. Autre (saisir un id de modèle manuellement)
+> 1
+
+✓ Configuré: Groq / llama-3.3-70b-versatile
+```
+
+Ce choix devient le provider/modèle par défaut de `deku` — plus besoin de `--provider`/`--model` à chaque lancement (toujours possible de les repasser ponctuellement pour override). La clé est stockée dans `~/.deku-agent/credentials.json` (permissions 600, jamais dans un projet ni committée) ; une variable d'environnement déjà exportée reste toujours prioritaire sur celle sauvegardée.
+
+Commandes scriptables (sans passer par l'assistant) :
+
+```bash
+deku config show                          # config actuelle, clés masquées
+deku config set-key groq gsk_...          # enregistre une clé directement
+deku config set-model groq llama-3.3-70b-versatile  # change le défaut
+deku config remove-key groq               # supprime une clé sauvegardée
+```
+
 ### Alias pratique
 
 ```bash
@@ -191,6 +234,7 @@ export default {
 - **Permissions SAFE/CONFIRM/DANGEROUS** étendues et personnalisables par projet, confirmation forcée sur fichiers sensibles (`.env`, `.git/`, lockfiles) même en `--auto`
 - **Support MCP** : connexion à des serveurs externes, outils agrégés dynamiquement
 - **Système de plugins** : extensibilité en-process via modules locaux
+- **Config interactive** (`deku config`) : ajout de clé API et choix du modèle après le lancement (façon Cline), catalogue de modèles fetché en direct par provider avec repli statique
 - **Project Scanner** (`src/contexte/scanner.ts`) : détecte langage, framework, package manager, nombre de fichiers/tests, présence de `.env`, fichiers clés — injecté dans le prompt système
 - **Mémoire SQLite** (`src/memory/`) via `bun:sqlite` : sessions/messages persistés dans `~/.deku-agent/deku.db`, `--resume` reprend une session interrompue, historique des snapshots
 - Mode `--plan` (aucune modification, aucun appel GitHub) et `--auto` (SAFE sans confirmation — les écritures GitHub et les rollbacks restent toujours confirmés)
