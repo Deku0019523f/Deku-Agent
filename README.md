@@ -66,15 +66,21 @@ Alternative sans variable d'environnement : installe [GitHub CLI](https://cli.gi
 
 Ajoute toutes ces lignes à `~/.bashrc` (ou `~/.zshrc`) pour ne pas les retaper à chaque session.
 
-### Configurer une clé API après le lancement (`deku config`)
+### Configurer une clé API après le lancement (`deku config` ou `/config`)
 
 Alternative aux variables d'environnement : un assistant interactif façon Cline, qui enregistre la clé et laisse choisir le modèle dans le catalogue du provider.
 
-```bash
-deku config
-```
+`bun run start` (ou `deku`, sans argument) **démarre toujours**, même sans aucune clé configurée — la session interactive s'ouvre et propose `/config` directement au prompt :
 
 ```
+╭────────────────────────────────────────╮
+│              DEKU AGENT                 │
+╰────────────────────────────────────────╯
+Project : ~/mon-projet
+Tape /config pour ajouter une clé API / changer de modèle, /help pour l'aide.
+
+Objectif (ou /config, /help) > /config
+
 ⚙️  Configuration Deku Agent
 
 Quel provider configurer ?
@@ -90,15 +96,17 @@ Récupération des modèles disponibles...
 Quel modèle Groq utiliser par défaut ?
   1. llama-3.3-70b-versatile
   2. llama-3.1-8b-instant
-  3. mixtral-8x7b-32768
   ...
-  8. Autre (saisir un id de modèle manuellement)
 > 1
 
 ✓ Configuré: Groq / llama-3.3-70b-versatile
+
+Objectif (ou /config, /help) >
 ```
 
-Ce choix devient le provider/modèle par défaut de `deku` — plus besoin de `--provider`/`--model` à chaque lancement (toujours possible de les repasser ponctuellement pour override). La clé est stockée dans `~/.deku-agent/credentials.json` (permissions 600, jamais dans un projet ni committée) ; une variable d'environnement déjà exportée reste toujours prioritaire sur celle sauvegardée.
+Après `/config`, retape directement ton objectif au même prompt — pas besoin de relancer le programme. Commandes disponibles en session : `/config`, `/help`, `/exit` (ou `/quit`).
+
+`deku config` (en dehors de toute session, une seule fois) fait exactement la même chose en ligne de commande directe. Dans les deux cas, la clé est stockée dans `~/.deku-agent/credentials.json` (permissions 600, jamais dans un projet ni committée) ; une variable d'environnement déjà exportée reste toujours prioritaire sur celle sauvegardée.
 
 Commandes scriptables (sans passer par l'assistant) :
 
@@ -157,6 +165,8 @@ deku --rollback 3 --cwd ~/whatsapp-gateway
 | `--rollback <id>` | Restaure le working tree à l'état du snapshot `<id>` et quitte | — |
 
 À chaque lancement, l'agent produit d'abord un **plan explicite** (liste d'étapes numérotées) avant d'agir ; en mode interactif il demande confirmation avant de lancer ce plan (sauf `--auto`).
+
+Lancé **sans objectif en argument**, `deku` ouvre une session interactive persistante : après chaque tâche (ou commande `/config`, `/help`), il revient au prompt pour un nouvel objectif, jusqu'à `/exit`. Lancé **avec un objectif en argument** (`deku "..."`), il reste en mode one-shot (une tâche, puis sortie) — pratique pour l'usage scripté.
 
 ## Extensibilité
 
