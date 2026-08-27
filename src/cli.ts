@@ -6,17 +6,42 @@ import { resolve } from "node:path";
 import { runAgentLoop, type AgentEvent } from "./agent/loop";
 import { findResumableSession } from "./memory/sessions";
 import { listProjectSnapshots, restoreSnapshot, formatSnapshotList } from "./tools/snapshots";
+import {
+  loadConfig,
+  setApiKey,
+  removeApiKey,
+  setDefaultProviderModel,
+  applyStoredKeysToEnv,
+  resolveProviderAndModel,
+  maskKey,
+  PROVIDER_IDS,
+  PROVIDER_ENV_VAR,
+} from "./config/store";
+import { fetchModels } from "./config/models";
+import { promptSelect, promptMasked } from "./config/prompts";
 import type { ProviderId } from "./providers";
 import type { AgentConfig } from "./types";
 
+// Clés stockées via `deku config` injectées dans l'environnement AVANT tout
+// le reste — comportement identique à un export shell classique pour les
+// providers (qui lisent process.env[...] sans savoir d'où vient la valeur).
+applyStoredKeysToEnv();
+
 const program = new Command();
+
+const PROVIDER_LABEL: Record<ProviderId, string> = {
+  openrouter: "OpenRouter",
+  gemini: "Gemini (Google)",
+  groq: "Groq",
+  openai: "OpenAI",
+};
 
 program
   .name("deku")
   .description("Deku Agent — agent de développement autonome pour Termux")
   .argument("[objectif]", "Objectif à réaliser (sinon prompt interactif)")
-  .option("--provider <provider>", "openrouter | gemini | groq | openai", "openrouter")
-  .option("--model <model>", "Modèle à utiliser", "anthropic/claude-3.5-sonnet")
+  .option("--provider <provider>", "openrouter | gemini | groq | openai (défaut: dernier configuré via `deku config`)")
+  .option("--model <model>", "Modèle à utiliser (défaut: dernier configuré via `deku config`)")
   .option("--cwd <path>", "Racine du projet", process.cwd())
   .option("--plan", "Mode plan : analyse et propose sans rien modifier", false)
   .option("--auto", "Enchaîne les actions SAFE sans confirmation", false)
@@ -54,17 +79,32 @@ program
       return;
     }
 
+    const stored = loadConfig();
+    const { provider, model } = resolveProviderAndModel(opts.provider, opts.model, stored);
+
+    const missingKey = !process.env[PROVIDER_ENV_VAR[provider]];
+    if (missingKey) {
+      console.log(
+        chalk.red(
+          `✗ Aucune clé API pour "${provider}" (variable ${PROVIDER_ENV_VAR[provider]} absente).\n` +
+            `  Lance "deku config" pour en ajouter une, ou exporte-la manuellement.`
+        )
+      );
+      process.exitCode = 1;
+      return;
+    }
+
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 
     const objectif =
       objectifArg ?? (await rl.question(chalk.cyan("Objectif > ")));
 
     const config: AgentConfig = {
-      provider: opts.provider as ProviderId,
-      model: opts.model,
+      provider,
+      model,
       mode: opts.plan ? "plan" : "act",
       auto: opts.auto,
-      cwd: resolve(opts.cwd),
+      cwd,
       maxIterations: parseInt(opts.maxIterations, 10),
     };
 
@@ -97,6 +137,138 @@ program
       rl.close();
     }
   });
+
+// ============================================================
+// deku config — gestion des clés API et du provider/modèle par défaut
+// ============================================================
+
+const configCmd = program
+  .command("config")
+  .description("Ajoute une clé API et choisis le provider/modèle par défaut (assistant interactif si appelé seul)");
+
+configCmd
+  .command("show")
+  .description("Affiche la config actuelle (clés masquées)")
+  .action(() => {
+    const stored = loadConfig();
+    console.log(chalk.bold("\nProvider par défaut:"), stored.defaultProvider ?? chalk.dim("(aucun, openrouter par défaut)"));
+    console.log(chalk.bold("Modèles mémorisés:"));
+    for (const p of PROVIDER_IDS) {
+      const model = stored.models?.[p];
+      if (model) console.log(`  ${PROVIDER_LABEL[p]}: ${model}`);
+    }
+    console.log(chalk.bold("\nClés API:"));
+    for (const p of PROVIDER_IDS) {
+      const stored_key = stored.apiKeys?.[p];
+      const envKey = process.env[PROVIDER_ENV_VAR[p]];
+      if (stored_key) {
+        console.log(`  ${PROVIDER_LABEL[p]}: ${chalk.green(maskKey(stored_key))} (sauvegardée)`);
+      } else if (envKey) {
+        console.log(`  ${PROVIDER_LABEL[p]}: ${chalk.green(maskKey(envKey))} (variable d'environnement)`);
+      } else {
+        console.log(`  ${PROVIDER_LABEL[p]}: ${chalk.dim("non configurée")}`);
+      }
+    }
+    console.log();
+  });
+
+configCmd
+  .command("set-key <provider> <key>")
+  .description("Enregistre une clé API pour un provider, sans passer par l'assistant")
+  .action((providerArg: string, key: string) => {
+    const provider = validateProvider(providerArg);
+    if (!provider) return;
+    setApiKey(provider, key);
+    console.log(chalk.green(`✓ Clé enregistrée pour ${PROVIDER_LABEL[provider]} (${maskKey(key)}).`));
+  });
+
+configCmd
+  .command("remove-key <provider>")
+  .description("Supprime la clé API sauvegardée pour un provider")
+  .action((providerArg: string) => {
+    const provider = validateProvider(providerArg);
+    if (!provider) return;
+    removeApiKey(provider);
+    console.log(chalk.green(`✓ Clé supprimée pour ${PROVIDER_LABEL[provider]}.`));
+  });
+
+configCmd
+  .command("set-model <provider> <model>")
+  .description("Change le provider et le modèle par défaut, sans passer par l'assistant")
+  .action((providerArg: string, model: string) => {
+    const provider = validateProvider(providerArg);
+    if (!provider) return;
+    setDefaultProviderModel(provider, model);
+    console.log(chalk.green(`✓ Par défaut: ${PROVIDER_LABEL[provider]} / ${model}`));
+  });
+
+configCmd.action(async () => {
+  await runConfigWizard();
+});
+
+function validateProvider(input: string): ProviderId | null {
+  if (PROVIDER_IDS.includes(input as ProviderId)) return input as ProviderId;
+  console.log(chalk.red(`✗ Provider inconnu: "${input}". Valeurs possibles: ${PROVIDER_IDS.join(", ")}`));
+  process.exitCode = 1;
+  return null;
+}
+
+async function runConfigWizard(): Promise<void> {
+  console.log(chalk.bold("\n⚙️  Configuration Deku Agent\n"));
+
+  let rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  const provider = (await promptSelect(
+    rl,
+    "Quel provider configurer ?",
+    PROVIDER_IDS.map((p) => ({ label: PROVIDER_LABEL[p], value: p }))
+  )) as ProviderId;
+  rl.close();
+
+  const stored = loadConfig();
+  const existingKey = stored.apiKeys?.[provider];
+  const keyPrompt = existingKey
+    ? `Clé API ${PROVIDER_LABEL[provider]} (Entrée pour garder ${maskKey(existingKey)}) : `
+    : `Clé API ${PROVIDER_LABEL[provider]} : `;
+
+  const typedKey = await promptMasked(keyPrompt);
+  const apiKey = typedKey || existingKey;
+
+  if (!apiKey) {
+    console.log(chalk.red("✗ Aucune clé fournie, configuration annulée."));
+    return;
+  }
+  if (typedKey) setApiKey(provider, apiKey);
+
+  console.log(chalk.dim("\nRécupération des modèles disponibles..."));
+  const { models, dynamic } = await fetchModels(provider, apiKey);
+  if (!dynamic) {
+    console.log(chalk.yellow("(catalogue live indisponible — liste de repli, peut être incomplète)"));
+  }
+
+  rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  const options = [
+    ...models.map((m) => ({ label: m.label ? `${m.id}  (${m.label})` : m.id, value: m.id })),
+    { label: "Autre (saisir un id de modèle manuellement)", value: "__custom__" },
+  ];
+  let model = await promptSelect(rl, `Quel modèle ${PROVIDER_LABEL[provider]} utiliser par défaut ?`, options);
+  if (model === "__custom__") {
+    model = (await rl.question("Id du modèle : ")).trim();
+  }
+  rl.close();
+
+  if (!model) {
+    console.log(chalk.red("✗ Aucun modèle choisi, configuration annulée."));
+    return;
+  }
+
+  setDefaultProviderModel(provider, model);
+  console.log(
+    chalk.green(
+      `\n✓ Configuré: ${PROVIDER_LABEL[provider]} / ${model}\n` +
+        `  Utilisé par défaut au prochain "deku ..." (remplaçable avec --provider/--model).\n`
+    )
+  );
+}
 
 function printBanner(config: AgentConfig) {
   console.log(chalk.bold("\n╭────────────────────────────────────────╮"));
