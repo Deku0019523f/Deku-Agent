@@ -1,6 +1,6 @@
 {
   "name": "deku-agent",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Agent de développement autonome pour Android/Termux — multi-provider LLM, boucle agentique, outils shell/fichiers.",
   "type": "module",
   "bin": {

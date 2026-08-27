@@ -6,9 +6,34 @@ Conçu pour Termux (Android), fonctionne aussi bien sur Linux/macOS/WSL.
 
 ## Installation
 
+### Installation rapide (recommandée)
+
+Une seule commande, sur Termux comme sur Linux/macOS — installe Bun si besoin, télécharge Deku Agent, et crée la commande `deku` :
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Deku0019523f/Deku-Agent/main/scripts/install.sh | bash
+```
+
+```
+[ok] Bun déjà présent (1.x.x).
+[info] Téléchargement de Deku Agent...
+[ok] Dépôt cloné dans .../opt/deku-agent
+[info] Installation des dépendances (bun install)...
+[ok] Dépendances installées.
+[ok] Lanceur créé à .../bin/deku
+[info] Tests de fumée...
+[ok] deku --version fonctionne.
+
+[ok] Deku Agent installé. Run: deku
+```
+
+Relancer la même commande plus tard met à jour l'installation existante (`git pull` + `bun install`) au lieu de la dupliquer.
+
+### Installation manuelle (pour contribuer / modifier le code)
+
 Prérequis commun : [Bun](https://bun.sh) (runtime JS/TS, aucune compilation native requise — `bun:sqlite` est natif à Bun).
 
-### Termux (Android)
+#### Termux (Android)
 
 ```bash
 pkg update -y
@@ -22,7 +47,7 @@ cd ~/deku-agent
 bun install
 ```
 
-### PC — Linux / macOS
+#### PC — Linux / macOS
 
 ```bash
 curl -fsSL https://bun.sh/install | bash
@@ -33,15 +58,17 @@ cd ~/deku-agent
 bun install
 ```
 
-### PC — Windows
+#### PC — Windows
 
-Bun ne supporte pas nativement Windows en dehors de WSL. Installe [WSL2](https://learn.microsoft.com/windows/wsl/install) (Ubuntu recommandé), puis suis les étapes **Linux / macOS** ci-dessus depuis un terminal WSL.
+Bun ne supporte pas nativement Windows en dehors de WSL. Installe [WSL2](https://learn.microsoft.com/windows/wsl/install) (Ubuntu recommandé), puis suis les étapes **Linux / macOS** ci-dessus (ou le one-liner) depuis un terminal WSL.
 
 ### Vérifier l'installation
 
 ```bash
-bun run src/cli.ts --help
+deku --version
 ```
+
+(avec l'installation manuelle, sans lanceur global : `bun run src/cli.ts --version`)
 
 ## Configuration
 
@@ -68,43 +95,49 @@ Ajoute toutes ces lignes à `~/.bashrc` (ou `~/.zshrc`) pour ne pas les retaper 
 
 ### Configurer une clé API après le lancement (`deku config` ou `/config`)
 
-Alternative aux variables d'environnement : un assistant interactif façon Cline, qui enregistre la clé et laisse choisir le modèle dans le catalogue du provider.
+Alternative aux variables d'environnement : un assistant interactif façon Cline (navigation aux flèches, recherche live), qui enregistre la clé et laisse choisir le modèle dans le catalogue du provider.
 
-`bun run start` (ou `deku`, sans argument) **démarre toujours**, même sans aucune clé configurée — la session interactive s'ouvre et propose `/config` directement au prompt :
+`deku` (sans argument) **démarre toujours**, même sans aucune clé configurée, et se connecte au dossier courant :
 
 ```
-╭────────────────────────────────────────╮
-│              DEKU AGENT                 │
-╰────────────────────────────────────────╯
-Project : ~/mon-projet
-Tape /config pour ajouter une clé API / changer de modèle, /help pour l'aide.
+      @@@@@@
+    @@@@@@@@@@
+   @@@@@@@@@@@@
+  @@@@  @@  @@@@
+ @@@@    @    @@@@
+  @@@@  @@  @@@@
+   @@@@@@@@@@@@
+    @@@@@@@@@@
+      @@@@@@
 
-Objectif (ou /config, /help) > /config
+Que puis-je faire pour toi ?
+Dossier : ~/mon-projet
+Tape / pour les commandes (essaie /help), Ctrl+C pour quitter.
+
+❯ /config
 
 ⚙️  Configuration Deku Agent
 
 Quel provider configurer ?
-  1. OpenRouter
-  2. Gemini (Google)
-  3. Groq
-  4. OpenAI
-> 3
-
-Clé API Groq : ****************************
-
-Récupération des modèles disponibles...
-Quel modèle Groq utiliser par défaut ?
-  1. llama-3.3-70b-versatile
-  2. llama-3.1-8b-instant
-  ...
-> 1
-
-✓ Configuré: Groq / llama-3.3-70b-versatile
-
-Objectif (ou /config, /help) >
+Rechercher...
+❯ OpenRouter
+  Gemini (Google)
+  Groq
+  OpenAI
+↑/↓ naviguer · Entrée valider · Échap annuler
 ```
 
-Après `/config`, retape directement ton objectif au même prompt — pas besoin de relancer le programme. Commandes disponibles en session : `/config`, `/help`, `/exit` (ou `/quit`).
+Après avoir choisi un provider (flèches ↑/↓ ou en tapant pour filtrer), la clé est demandée (saisie masquée), puis le modèle — liste **récupérée en direct** chez le provider, avec recherche live comme le champ "Search models..." de Cline. Retape ensuite directement ton objectif au même prompt, pas besoin de relancer le programme.
+
+Commandes disponibles en session :
+
+| Commande | Effet |
+|---|---|
+| `/config`, `/model`, `/settings` | Ouvre l'assistant clé + modèle |
+| `/mcp` | Liste les serveurs MCP configurés pour ce projet |
+| `/plugins` | Liste les plugins chargés pour ce projet |
+| `/help` | Affiche cette liste |
+| `/exit`, `/quit` | Quitte |
 
 `deku config` (en dehors de toute session, une seule fois) fait exactement la même chose en ligne de commande directe. Dans les deux cas, la clé est stockée dans `~/.deku-agent/credentials.json` (permissions 600, jamais dans un projet ni committée) ; une variable d'environnement déjà exportée reste toujours prioritaire sur celle sauvegardée.
 
@@ -117,7 +150,9 @@ deku config set-model groq llama-3.3-70b-versatile  # change le défaut
 deku config remove-key groq               # supprime une clé sauvegardée
 ```
 
-### Alias pratique
+### Alias pratique (installation manuelle uniquement)
+
+L'installation rapide (`scripts/install.sh`) crée déjà la commande `deku` globalement — cette étape ne concerne que l'installation manuelle.
 
 ```bash
 echo 'alias deku="bun run ~/deku-agent/src/cli.ts"' >> ~/.bashrc
@@ -244,7 +279,9 @@ export default {
 - **Permissions SAFE/CONFIRM/DANGEROUS** étendues et personnalisables par projet, confirmation forcée sur fichiers sensibles (`.env`, `.git/`, lockfiles) même en `--auto`
 - **Support MCP** : connexion à des serveurs externes, outils agrégés dynamiquement
 - **Système de plugins** : extensibilité en-process via modules locaux
-- **Config interactive** (`deku config`) : ajout de clé API et choix du modèle après le lancement (façon Cline), catalogue de modèles fetché en direct par provider avec repli statique
+- **Config interactive** (`deku config` ou `/config` en session) : ajout de clé API et choix du modèle après le lancement (façon Cline — navigation flèches, recherche live), catalogue de modèles fetché en direct par provider avec repli statique
+- **Session persistante avec commandes slash** : `deku` sans argument démarre toujours (même sans clé configurée) et reste ouvert entre les tâches ; `/config`, `/model`, `/settings`, `/mcp`, `/plugins`, `/help`, `/exit`
+- **Installateur one-liner** (`scripts/install.sh`, façon cline-termux) : installe Bun si besoin, clone/met à jour le dépôt, crée la commande globale `deku`, tests de fumée automatiques
 - **Project Scanner** (`src/contexte/scanner.ts`) : détecte langage, framework, package manager, nombre de fichiers/tests, présence de `.env`, fichiers clés — injecté dans le prompt système
 - **Mémoire SQLite** (`src/memory/`) via `bun:sqlite` : sessions/messages persistés dans `~/.deku-agent/deku.db`, `--resume` reprend une session interrompue, historique des snapshots
 - Mode `--plan` (aucune modification, aucun appel GitHub) et `--auto` (SAFE sans confirmation — les écritures GitHub et les rollbacks restent toujours confirmés)

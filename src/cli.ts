@@ -18,9 +18,14 @@ import {
   PROVIDER_ENV_VAR,
 } from "./config/store";
 import { fetchModels } from "./config/models";
-import { promptSelect, promptMasked } from "./config/prompts";
+import { promptMasked } from "./config/prompts";
+import { selectMenu } from "./cli-ui/select-menu";
+import { printSplash } from "./cli-ui/banner";
+import { loadMcpServers } from "./mcp/config";
+import { pluginRegistry } from "./plugins/registry";
 import type { ProviderId } from "./providers";
 import type { AgentConfig } from "./types";
+import pkg from "../package.json";
 
 // Clés stockées via `deku config` injectées dans l'environnement AVANT tout
 // le reste — comportement identique à un export shell classique pour les
@@ -39,9 +44,10 @@ const PROVIDER_LABEL: Record<ProviderId, string> = {
 program
   .name("deku")
   .description("Deku Agent — agent de développement autonome pour Termux")
-  .argument("[objectif]", "Objectif à réaliser (sinon prompt interactif)")
-  .option("--provider <provider>", "openrouter | gemini | groq | openai (défaut: dernier configuré via `deku config`)")
-  .option("--model <model>", "Modèle à utiliser (défaut: dernier configuré via `deku config`)")
+  .version(pkg.version, "--version", "Affiche la version installée")
+  .argument("[objectif]", "Objectif à réaliser (sinon session interactive)")
+  .option("--provider <provider>", "openrouter | gemini | groq | openai (défaut: dernier configuré via /config)")
+  .option("--model <model>", "Modèle à utiliser (défaut: dernier configuré via /config)")
   .option("--cwd <path>", "Racine du projet", process.cwd())
   .option("--plan", "Mode plan : analyse et propose sans rien modifier", false)
   .option("--auto", "Enchaîne les actions SAFE sans confirmation", false)
@@ -79,15 +85,10 @@ program
       return;
     }
 
-    // Le projet démarre TOUJOURS, même sans clé API configurée — on ne
-    // sort plus en erreur ici. Une session interactive s'ouvre, avec une
-    // commande /config disponible pour configurer clé + modèle à la volée
-    // (comme Cline), sans avoir à relancer le programme.
-    console.log(chalk.bold("\n╭────────────────────────────────────────╮"));
-    console.log(chalk.bold("│              DEKU AGENT                 │"));
-    console.log(chalk.bold("╰────────────────────────────────────────╯"));
-    console.log(`Project : ${chalk.dim(cwd)}`);
-    console.log(chalk.dim("Tape /config pour ajouter une clé API / changer de modèle, /help pour l'aide.\n"));
+    // Le projet démarre TOUJOURS, connecté à `cwd` (le dossier courant par
+    // défaut), même sans clé API configurée — /config est disponible dès
+    // le premier prompt, pas besoin de relancer le programme.
+    printSplash(cwd);
 
     let rl = readline.createInterface({ input: process.stdin, output: process.stdout });
     let pendingInput: string | undefined = objectifArg;
@@ -96,7 +97,7 @@ program
     while (true) {
       let input: string;
       try {
-        input = pendingInput ?? (await rl.question(chalk.cyan("Objectif (ou /config, /help) > ")));
+        input = pendingInput ?? (await rl.question(chalk.cyan("❯ ")));
       } catch {
         break; // stdin fermé (Ctrl+D, pipe épuisé...) : sortie propre
       }
@@ -106,19 +107,17 @@ program
 
       if (input.startsWith("/")) {
         const [cmd] = input.slice(1).split(/\s+/);
-        if (cmd === "config") {
-          rl.close(); // une seule interface readline active à la fois (cf. assistant de config)
+        if (cmd === "config" || cmd === "model" || cmd === "settings") {
+          rl.close(); // une seule interface/lecteur raw-mode actif à la fois
           await runConfigWizard();
           applyStoredKeysToEnv();
           rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+        } else if (cmd === "mcp") {
+          printMcpStatus(cwd);
+        } else if (cmd === "plugins") {
+          await printPluginsStatus(cwd);
         } else if (cmd === "help") {
-          console.log(
-            chalk.bold("\nCommandes disponibles :\n") +
-              "  /config          Ajouter/changer une clé API et le modèle par défaut\n" +
-              "  /help            Cette aide\n" +
-              "  /exit, /quit     Quitter\n" +
-              "  (tout le reste)  Traité comme un objectif pour l'agent\n"
-          );
+          printHelp();
         } else if (cmd === "exit" || cmd === "quit") {
           break;
         } else {
@@ -189,6 +188,7 @@ program
 
 // ============================================================
 // deku config — gestion des clés API et du provider/modèle par défaut
+// (équivalent de /config, /model, /settings en session interactive)
 // ============================================================
 
 const configCmd = program
@@ -208,10 +208,10 @@ configCmd
     }
     console.log(chalk.bold("\nClés API:"));
     for (const p of PROVIDER_IDS) {
-      const stored_key = stored.apiKeys?.[p];
+      const savedKey = stored.apiKeys?.[p];
       const envKey = process.env[PROVIDER_ENV_VAR[p]];
-      if (stored_key) {
-        console.log(`  ${PROVIDER_LABEL[p]}: ${chalk.green(maskKey(stored_key))} (sauvegardée)`);
+      if (savedKey) {
+        console.log(`  ${PROVIDER_LABEL[p]}: ${chalk.green(maskKey(savedKey))} (sauvegardée)`);
       } else if (envKey) {
         console.log(`  ${PROVIDER_LABEL[p]}: ${chalk.green(maskKey(envKey))} (variable d'environnement)`);
       } else {
@@ -265,13 +265,15 @@ function validateProvider(input: string): ProviderId | null {
 async function runConfigWizard(): Promise<void> {
   console.log(chalk.bold("\n⚙️  Configuration Deku Agent\n"));
 
-  let rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-  const provider = (await promptSelect(
-    rl,
-    "Quel provider configurer ?",
-    PROVIDER_IDS.map((p) => ({ label: PROVIDER_LABEL[p], value: p }))
-  )) as ProviderId;
-  rl.close();
+  const providerResult = await selectMenu({
+    title: "Quel provider configurer ?",
+    items: PROVIDER_IDS.map((p) => ({ label: PROVIDER_LABEL[p], value: p })),
+  });
+  if (providerResult.kind !== "value") {
+    console.log(chalk.dim("Annulé."));
+    return;
+  }
+  const provider = providerResult.value as ProviderId;
 
   const stored = loadConfig();
   const existingKey = stored.apiKeys?.[provider];
@@ -291,19 +293,28 @@ async function runConfigWizard(): Promise<void> {
   console.log(chalk.dim("\nRécupération des modèles disponibles..."));
   const { models, dynamic } = await fetchModels(provider, apiKey);
   if (!dynamic) {
-    console.log(chalk.yellow("(catalogue live indisponible — liste de repli, peut être incomplète)"));
+    console.log(chalk.yellow("(catalogue live indisponible — liste de repli, peut être incomplète)\n"));
   }
 
-  rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-  const options = [
-    ...models.map((m) => ({ label: m.label ? `${m.id}  (${m.label})` : m.id, value: m.id })),
-    { label: "Autre (saisir un id de modèle manuellement)", value: "__custom__" },
-  ];
-  let model = await promptSelect(rl, `Quel modèle ${PROVIDER_LABEL[provider]} utiliser par défaut ?`, options);
-  if (model === "__custom__") {
+  const modelResult = await selectMenu({
+    title: `Quel modèle ${PROVIDER_LABEL[provider]} utiliser par défaut ?`,
+    subtitle: "Tu peux en changer à tout moment avec /model.",
+    searchPlaceholder: "Rechercher un modèle...",
+    items: models.map((m) => ({ label: m.id, value: m.id, hint: m.label })),
+    customEntryLabel: "Autre (saisir un id de modèle manuellement)",
+  });
+
+  let model: string;
+  if (modelResult.kind === "cancel") {
+    console.log(chalk.dim("Annulé."));
+    return;
+  } else if (modelResult.kind === "custom") {
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
     model = (await rl.question("Id du modèle : ")).trim();
+    rl.close();
+  } else {
+    model = modelResult.value;
   }
-  rl.close();
 
   if (!model) {
     console.log(chalk.red("✗ Aucun modèle choisi, configuration annulée."));
@@ -314,8 +325,49 @@ async function runConfigWizard(): Promise<void> {
   console.log(
     chalk.green(
       `\n✓ Configuré: ${PROVIDER_LABEL[provider]} / ${model}\n` +
-        `  Utilisé par défaut au prochain "deku ..." (remplaçable avec --provider/--model).\n`
+        `  Utilisé par défaut au prochain objectif (remplaçable avec --provider/--model).\n`
     )
+  );
+}
+
+function printMcpStatus(cwd: string): void {
+  const servers = loadMcpServers(cwd);
+  const names = Object.keys(servers);
+  console.log(chalk.bold("\nServeurs MCP configurés :"));
+  if (names.length === 0) {
+    console.log(chalk.dim("  Aucun. Ajoute-en dans .deku-agent/mcp.json (voir README)."));
+  } else {
+    for (const name of names) {
+      const s = servers[name];
+      console.log(`  ${chalk.cyan(name)}: ${s.command} ${(s.args ?? []).join(" ")}`);
+    }
+  }
+  console.log(chalk.dim("  Connectés automatiquement au lancement d'une tâche.\n"));
+}
+
+async function printPluginsStatus(cwd: string): Promise<void> {
+  const warnings = await pluginRegistry.loadAll(cwd);
+  const tools = pluginRegistry.getToolDefinitions();
+  console.log(chalk.bold("\nPlugins chargés :"));
+  if (tools.length === 0) {
+    console.log(chalk.dim("  Aucun. Ajoute-en dans .deku-agent/plugins/<nom>/ (voir README)."));
+  } else {
+    for (const tool of tools) console.log(`  ${chalk.cyan(tool.name)}: ${tool.description}`);
+  }
+  for (const w of warnings) console.log(chalk.yellow(`  ⚠ ${w}`));
+  console.log();
+  pluginRegistry.reset();
+}
+
+function printHelp(): void {
+  console.log(
+    chalk.bold("\nCommandes disponibles :\n") +
+      "  /config, /model, /settings   Ajouter/changer une clé API et le modèle par défaut\n" +
+      "  /mcp                         Liste les serveurs MCP configurés\n" +
+      "  /plugins                     Liste les plugins chargés\n" +
+      "  /help                        Cette aide\n" +
+      "  /exit, /quit                 Quitter\n" +
+      "  (tout le reste)              Traité comme un objectif pour l'agent\n"
   );
 }
 
