@@ -72,15 +72,20 @@ export const geminiProvider: LLMProvider = {
     }
 
     const parts: any[] = candidate.content?.parts ?? [];
-    const textPart = parts.find((p) => p.text)?.text ?? null;
-    const functionCalls = parts.filter((p) => p.functionCall);
+    const textEntry = parts.find((p) => p.text);
+    const textPart = textEntry?.text ?? null;
+    const functionCallParts = parts.filter((p) => p.functionCall);
 
     const tool_calls: ToolCall[] | undefined =
-      functionCalls.length > 0
-        ? functionCalls.map((p, i) => ({
+      functionCallParts.length > 0
+        ? functionCallParts.map((p, i) => ({
             id: `gemini-call-${Date.now()}-${i}`,
             name: p.functionCall.name,
             arguments: p.functionCall.args ?? {},
+            // Seul le PREMIER functionCall porte la signature en cas
+            // d'appels parallèles (doc officielle) — les autres n'en ont
+            // simplement pas, thoughtSignature reste undefined pour eux.
+            ...(p.thoughtSignature ? { thoughtSignature: p.thoughtSignature } : {}),
           }))
         : undefined;
 
@@ -88,6 +93,11 @@ export const geminiProvider: LLMProvider = {
       role: "assistant",
       content: textPart,
       tool_calls,
+      // Réponse texte pure (pas de tool_calls) : la signature, si présente,
+      // vit sur cette même part et doit être renvoyée au tour suivant.
+      ...(!tool_calls && textEntry?.thoughtSignature
+        ? { thoughtSignature: textEntry.thoughtSignature }
+        : {}),
     };
 
     return {
@@ -126,14 +136,26 @@ function toGeminiContent(m: Message) {
   if (m.role === "assistant" && m.tool_calls) {
     return {
       role: "model",
+      // L'ordre des parts doit être préservé exactement tel que reçu
+      // (doc officielle, cas des appels parallèles) — .map() sur
+      // m.tool_calls conserve cet ordre puisqu'il vient lui-même,
+      // sans réordonnancement, du tableau `parts` original côté lecture.
       parts: m.tool_calls.map((tc) => ({
         functionCall: { name: tc.name, args: tc.arguments },
+        ...(tc.thoughtSignature ? { thoughtSignature: tc.thoughtSignature } : {}),
       })),
     };
   }
   return {
     role: m.role === "assistant" ? "model" : "user",
-    parts: [{ text: m.content ?? "" }],
+    parts: [
+      {
+        text: m.content ?? "",
+        ...(m.role === "assistant" && m.thoughtSignature
+          ? { thoughtSignature: m.thoughtSignature }
+          : {}),
+      },
+    ],
   };
 }
 

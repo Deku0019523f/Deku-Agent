@@ -19,6 +19,7 @@ interface StoredMessage {
   tool_calls?: unknown;
   tool_call_id?: string;
   name?: string;
+  thoughtSignature?: string;
   created_at: number;
 }
 
@@ -71,6 +72,7 @@ export async function saveMessage(sessionId: string, message: Message): Promise<
     tool_calls: message.tool_calls,
     tool_call_id: message.tool_call_id,
     name: message.name,
+    thoughtSignature: message.thoughtSignature,
     created_at: Date.now(),
   });
   writeJsonAtomic(path, messages);
@@ -84,6 +86,7 @@ export async function getSessionMessages(sessionId: string): Promise<Message[]> 
     tool_calls: m.tool_calls as Message["tool_calls"],
     tool_call_id: m.tool_call_id,
     name: m.name,
+    thoughtSignature: m.thoughtSignature,
   }));
 }
 

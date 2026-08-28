@@ -23,6 +23,12 @@ export interface ToolCall {
   id: string;
   name: string;
   arguments: Record<string, unknown>;
+  /**
+   * Opaque, spécifique à Gemini 3+ (voir providers/gemini.ts) : signature
+   * chiffrée du raisonnement interne du modèle, à renvoyer telle quelle
+   * dans l'historique. Ignoré par les autres providers.
+   */
+  thoughtSignature?: string;
 }
 
 export interface ToolResult {
@@ -40,6 +46,8 @@ export interface Message {
   // Présent uniquement sur les messages "tool" (résultat renvoyé au LLM)
   tool_call_id?: string;
   name?: string;
+  /** Idem ToolCall.thoughtSignature, pour une réponse texte (sans tool_calls). */
+  thoughtSignature?: string;
 }
 
 export interface ProviderResponse {
