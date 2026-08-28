@@ -1,7 +1,6 @@
-import { readdirSync, existsSync, readFileSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { readdirSync, existsSync, readFileSync, statSync, mkdirSync, writeFileSync } from "node:fs";
+import { join, basename } from "node:path";
 import { homedir } from "node:os";
-import { pathToFileURL } from "node:url";
 import type { ToolDefinition, AgentConfig } from "../types";
 import type { DekuPlugin, PluginManifest, DekuPluginContext } from "./types";
 
@@ -64,7 +63,14 @@ class PluginRegistry {
           continue;
         }
 
-        const mod = await import(pathToFileURL(entryFile).href);
+        // Node ne sait pas exécuter du TypeScript directement (contrairement
+        // à Bun) : un plugin .ts est transpilé à la volée vers un .js mis en
+        // cache dans le dossier du plugin, puis c'est CE fichier qui est
+        // importé. Fichiers .js/.mjs/.cjs déjà valides pour Node : chargés
+        // tels quels, sans étape intermédiaire.
+        const resolvedEntry = entryFile.endsWith(".ts") ? transpilePluginToJs(entryFile) : entryFile;
+
+        const mod = await import(resolvedEntry);
         const plugin: DekuPlugin | undefined = mod.default ?? mod.plugin;
 
         if (!isValidPlugin(plugin)) {
@@ -167,6 +173,42 @@ function isValidPlugin(plugin: unknown): plugin is DekuPlugin {
     Array.isArray(p.tools) &&
     typeof p.executeTool === "function"
   );
+}
+
+/**
+ * Transpile un plugin .ts vers un .js CommonJS mis en cache à côté du
+ * fichier source (<dossier>/.deku-agent-cache/<nom>.js), régénéré si la
+ * source est plus récente. Utilise `typescript` (dépendance déjà présente,
+ * pur JS sans binding natif — safe sur Termux) au lieu d'un vrai
+ * bundler/loader, largement suffisant pour un plugin mono-fichier.
+ */
+function transpilePluginToJs(entryFile: string): string {
+  const ts = require("typescript") as typeof import("typescript");
+  const cacheDir = join(pluginDirOf(entryFile), ".deku-agent-cache");
+  const outFile = join(cacheDir, basename(entryFile).replace(/\.ts$/, ".js"));
+
+  const sourceMtime = statSync(entryFile).mtimeMs;
+  if (existsSync(outFile) && statSync(outFile).mtimeMs >= sourceMtime) {
+    return outFile; // cache encore valide, pas de retranspilation inutile
+  }
+
+  const source = readFileSync(entryFile, "utf-8");
+  const output = ts.transpileModule(source, {
+    compilerOptions: {
+      module: ts.ModuleKind.CommonJS,
+      target: ts.ScriptTarget.ES2022,
+      esModuleInterop: true,
+    },
+    fileName: entryFile,
+  });
+
+  mkdirSync(cacheDir, { recursive: true });
+  writeFileSync(outFile, output.outputText, "utf-8");
+  return outFile;
+}
+
+function pluginDirOf(entryFile: string): string {
+  return entryFile.slice(0, entryFile.length - basename(entryFile).length - 1);
 }
 
 export const pluginRegistry = new PluginRegistry();

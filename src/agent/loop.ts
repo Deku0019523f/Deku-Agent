@@ -197,41 +197,42 @@ async function runAgentLoopInner(
   options: RunAgentLoopOptions
 ): Promise<void> {
   let messages: Message[];
-  let sessionId: string;
+  let sessionId: string | undefined;
 
-  if (options.resumeSessionId) {
-    sessionId = options.resumeSessionId;
-    messages = await getSessionMessages(sessionId);
-  } else {
-    sessionId = await createSession(config.cwd, objective);
-    const systemMessage: Message = {
-      role: "system",
-      content: SYSTEM_PROMPT(
-        config,
-        formatProjectContext(projectContext),
-        formatProjectMemory(projectMemory)
-      ),
-    };
-    const userMessage: Message = { role: "user", content: objective };
-    messages = [systemMessage, userMessage];
-    await saveMessage(sessionId, systemMessage);
-    await saveMessage(sessionId, userMessage);
+  try {
+    if (options.resumeSessionId) {
+      sessionId = options.resumeSessionId;
+      messages = await getSessionMessages(sessionId);
+    } else {
+      sessionId = await createSession(config.cwd, objective);
+      const systemMessage: Message = {
+        role: "system",
+        content: SYSTEM_PROMPT(
+          config,
+          formatProjectContext(projectContext),
+          formatProjectMemory(projectMemory)
+        ),
+      };
+      const userMessage: Message = { role: "user", content: objective };
+      messages = [systemMessage, userMessage];
+      await saveMessage(sessionId, systemMessage);
+      await saveMessage(sessionId, userMessage);
 
-    // Planning explicite (V0.6), skippé au resume : le plan d'origine
-    // est déjà dans l'historique rechargé depuis SQLite.
-    const planMessage = await generatePlan(provider, config, objective, systemMessage, emit);
-    messages.push(planMessage);
-    await saveMessage(sessionId, planMessage);
+      // Planning explicite (V0.6), skippé au resume : le plan d'origine
+      // est déjà dans l'historique rechargé depuis SQLite.
+      const planMessage = await generatePlan(provider, config, objective, systemMessage, emit);
+      messages.push(planMessage);
+      await saveMessage(sessionId, planMessage);
 
-    if (!config.auto) {
-      const proceed = await confirm("Lancer ce plan ?");
-      if (!proceed) {
-        await endSession(sessionId, "interrupted");
-        emit({ type: "error", payload: "Plan refusé par l'utilisateur, session arrêtée." });
-        return;
+      if (!config.auto) {
+        const proceed = await confirm("Lancer ce plan ?");
+        if (!proceed) {
+          await endSession(sessionId, "interrupted");
+          emit({ type: "error", payload: "Plan refusé par l'utilisateur, session arrêtée." });
+          return;
+        }
       }
     }
-  }
 
   // Suivi anti-boucle-d'échec : signature du dernier tool_call en échec
   // et son nombre de répétitions consécutives.
@@ -239,8 +240,7 @@ async function runAgentLoopInner(
   let consecutiveFailures = 0;
   const MAX_CONSECUTIVE_FAILURES = 3;
 
-  try {
-    for (let iteration = 0; iteration < config.maxIterations; iteration++) {
+  for (let iteration = 0; iteration < config.maxIterations; iteration++) {
       emit({ type: "thinking", payload: { iteration } });
 
       const response = await sendWithRetry(
@@ -316,7 +316,7 @@ async function runAgentLoopInner(
       payload: `Limite de ${config.maxIterations} itérations atteinte sans conclusion.`,
     });
   } catch (e) {
-    await endSession(sessionId, "error");
+    if (sessionId) await endSession(sessionId, "error");
     throw e;
   }
 }

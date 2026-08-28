@@ -8,59 +8,62 @@ Conçu pour Termux (Android), fonctionne aussi bien sur Linux/macOS/WSL.
 
 ### Installation rapide (recommandée)
 
-Une seule commande, sur Termux comme sur Linux/macOS — installe Bun si besoin, télécharge Deku Agent, et crée la commande `deku` :
+Une seule commande, sur Termux comme sur Linux/macOS — installe Node.js si besoin, télécharge Deku Agent, compile, et crée la commande `deku` :
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Deku0019523f/Deku-Agent/main/scripts/install.sh | bash
 ```
 
 ```
-[ok] Bun déjà présent (1.x.x).
+[ok] Node.js déjà présent (v20.x.x).
 [info] Téléchargement de Deku Agent...
 [ok] Dépôt cloné dans .../opt/deku-agent
-[info] Installation des dépendances (bun install)...
+[info] Installation des dépendances (npm install)...
 [ok] Dépendances installées.
+[info] Compilation (npm run build)...
+[ok] Compilation terminée.
 [ok] Lanceur créé à .../bin/deku
 [info] Tests de fumée...
-[ok] deku --version fonctionne.
+[ok] deku --version -> 1.0.0
 
 [ok] Deku Agent installé. Run: deku
 ```
 
-Relancer la même commande plus tard met à jour l'installation existante (`git pull` + `bun install`) au lieu de la dupliquer.
+Relancer la même commande plus tard met à jour l'installation existante (`git pull` + recompilation) au lieu de la dupliquer.
+
+> **Pourquoi Node.js et pas Bun ?** Le binaire officiel de Bun n'est pas compilé en PIE et ne peut pas s'exécuter sur Android — Bun n'est [pas supporté sur Termux](https://github.com/oven-sh/bun/issues/28924), quelle que soit la méthode d'installation. Node.js, lui, tourne nativement sur Termux (paquet `nodejs` officiel), sans chroot ni `proot-distro`. C'est pour ça que Deku Agent est un projet Node.js/TypeScript classique (compilé via `tsc`, aucune dépendance native).
 
 ### Installation manuelle (pour contribuer / modifier le code)
 
-Prérequis commun : [Bun](https://bun.sh) (runtime JS/TS, aucune compilation native requise — `bun:sqlite` est natif à Bun).
+Prérequis commun : [Node.js](https://nodejs.org) ≥ 18.
 
 #### Termux (Android)
 
 ```bash
 pkg update -y
-pkg install -y git unzip
-
-curl -fsSL https://bun.sh/install | bash
-source ~/.bashrc
+pkg install -y git nodejs
 
 git clone https://github.com/Deku0019523f/Deku-Agent.git ~/deku-agent
 cd ~/deku-agent
-bun install
+npm install
+npm run build
 ```
 
 #### PC — Linux / macOS
 
 ```bash
-curl -fsSL https://bun.sh/install | bash
-source ~/.bashrc   # ou ~/.zshrc selon le shell
+# Debian/Ubuntu : sudo apt install -y nodejs npm
+# macOS         : brew install node
 
 git clone https://github.com/Deku0019523f/Deku-Agent.git ~/deku-agent
 cd ~/deku-agent
-bun install
+npm install
+npm run build
 ```
 
 #### PC — Windows
 
-Bun ne supporte pas nativement Windows en dehors de WSL. Installe [WSL2](https://learn.microsoft.com/windows/wsl/install) (Ubuntu recommandé), puis suis les étapes **Linux / macOS** ci-dessus (ou le one-liner) depuis un terminal WSL.
+Fonctionne directement (Node.js est multiplateforme), ou via [WSL2](https://learn.microsoft.com/windows/wsl/install) en suivant les étapes **Linux / macOS** ci-dessus.
 
 ### Vérifier l'installation
 
@@ -68,7 +71,7 @@ Bun ne supporte pas nativement Windows en dehors de WSL. Installe [WSL2](https:/
 deku --version
 ```
 
-(avec l'installation manuelle, sans lanceur global : `bun run src/cli.ts --version`)
+(avec l'installation manuelle, sans lanceur global : `node dist/cli.js --version`, ou `npm start -- --version`)
 
 ## Configuration
 
@@ -155,7 +158,7 @@ deku config remove-key groq               # supprime une clé sauvegardée
 L'installation rapide (`scripts/install.sh`) crée déjà la commande `deku` globalement — cette étape ne concerne que l'installation manuelle.
 
 ```bash
-echo 'alias deku="bun run ~/deku-agent/src/cli.ts"' >> ~/.bashrc
+echo 'alias deku="node ~/deku-agent/dist/cli.js"' >> ~/.bashrc
 source ~/.bashrc
 ```
 
@@ -281,22 +284,23 @@ export default {
 - **Système de plugins** : extensibilité en-process via modules locaux
 - **Config interactive** (`deku config` ou `/config` en session) : ajout de clé API et choix du modèle après le lancement (façon Cline — navigation flèches, recherche live), catalogue de modèles fetché en direct par provider avec repli statique
 - **Session persistante avec commandes slash** : `deku` sans argument démarre toujours (même sans clé configurée) et reste ouvert entre les tâches ; `/config`, `/model`, `/settings`, `/mcp`, `/plugins`, `/help`, `/exit`
-- **Installateur one-liner** (`scripts/install.sh`, façon cline-termux) : installe Bun si besoin, clone/met à jour le dépôt, crée la commande globale `deku`, tests de fumée automatiques
+- **Installateur one-liner** (`scripts/install.sh`, façon cline-termux) : installe Node.js si besoin, clone/met à jour le dépôt, compile, crée la commande globale `deku`, tests de fumée automatiques
 - **Project Scanner** (`src/contexte/scanner.ts`) : détecte langage, framework, package manager, nombre de fichiers/tests, présence de `.env`, fichiers clés — injecté dans le prompt système
-- **Mémoire SQLite** (`src/memory/`) via `bun:sqlite` : sessions/messages persistés dans `~/.deku-agent/deku.db`, `--resume` reprend une session interrompue, historique des snapshots
+- **Stockage en fichiers JSON** (`src/memory/`, `~/.deku-agent/store/`) : sessions et historique des snapshots dans des fichiers dédiés, messages shardés par session (`store/messages/<id>.json`), écriture atomique (fichier temporaire + `rename()`) pour résister à un arrêt brutal du process. `--resume` reprend une session interrompue. Zéro dépendance native — voir "Pourquoi Node.js et pas Bun" plus haut.
 - Mode `--plan` (aucune modification, aucun appel GitHub) et `--auto` (SAFE sans confirmation — les écritures GitHub et les rollbacks restent toujours confirmés)
 - CLI terminal avec rendu de la boucle en temps réel
 
 **Pas encore fait (pistes pour la suite) :**
 - Rafraîchissement dynamique des outils MCP en cours de run (`notifications/tools/list_changed` actuellement ignoré)
-- Tests automatisés (unitaires/intégration) — validation actuelle faite manuellement par scénarios bundlés (esbuild) contre de vrais serveurs MCP/GitHub
+- Tests automatisés (unitaires/intégration) — validation actuelle faite manuellement, avec du vrai code compilé exécuté sous Node (`npm run build && node dist/cli.js`) et de vrais serveurs MCP/GitHub
 - Sandbox pour les plugins (actuellement exécution en process, sans isolation)
 
 ## Points d'attention techniques
 
 - **Gemini** a un format de tool calling différent des 3 autres (rôles `user`/`model`, pas de rôle `tool` natif, schema JSON plus strict) — géré dans `src/providers/gemini.ts`.
 - Les outils filesystem sont **restreints au `--cwd`** — toute tentative de sortir du workspace est bloquée.
-- La base SQLite est **globale** (`~/.deku-agent/deku.db`) ; sessions/mémoire/snapshots sont séparés par `project_path`. Supprime ce fichier pour tout réinitialiser.
+- Le stockage est **global** (`~/.deku-agent/store/`) ; sessions/mémoire/snapshots sont séparés par `project_path` à l'intérieur des fichiers JSON. Supprime ce dossier pour tout réinitialiser.
+- Plugins écrits en `.ts` : transpilés à la volée vers `.js` (via le compilateur TypeScript, pur JS, aucune dépendance native) et mis en cache dans `<plugin>/.deku-agent-cache/`, régénéré uniquement si la source a changé (comparaison de date de modification).
 - `--resume` ne retrouve que les sessions au statut `running` (interrompues) — une session `completed` ne peut pas être reprise, seulement consultée en base.
 - Les snapshots Git automatiques nécessitent un dépôt Git initialisé dans `--cwd` ; hors dépôt Git, ils sont silencieusement désactivés (pas de rollback possible, le reste de l'agent fonctionne normalement).
 - Un plugin ou serveur MCP mal configuré ne bloque jamais le démarrage : l'agent journalise un avertissement et continue sans lui.

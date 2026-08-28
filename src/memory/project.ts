@@ -1,4 +1,10 @@
-import { getDb } from "./db";
+import { readJson, writeJsonAtomic, PROJECT_MEMORY_FILE } from "./json-store";
+
+type ProjectMemoryStore = Record<string, Record<string, string>>; // { [projectPath]: { [key]: value } }
+
+function loadStore(): ProjectMemoryStore {
+  return readJson<ProjectMemoryStore>(PROJECT_MEMORY_FILE, {});
+}
 
 /**
  * Informations persistantes SUR le projet, indépendantes des sessions :
@@ -11,24 +17,13 @@ export async function setProjectMemory(
   key: string,
   value: string
 ): Promise<void> {
-  const db = await getDb();
-  db.run(
-    `INSERT INTO project_memory (project_path, key, value, updated_at)
-     VALUES (?, ?, ?, ?)
-     ON CONFLICT(project_path, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
-    [projectPath, key, value, Date.now()]
-  );
+  const store = loadStore();
+  store[projectPath] = { ...store[projectPath], [key]: value };
+  writeJsonAtomic(PROJECT_MEMORY_FILE, store);
 }
 
-export async function getProjectMemory(
-  projectPath: string
-): Promise<Record<string, string>> {
-  const db = await getDb();
-  const rows = db
-    .query(`SELECT key, value FROM project_memory WHERE project_path = ?`)
-    .all(projectPath) as { key: string; value: string }[];
-
-  return Object.fromEntries(rows.map((r) => [r.key, r.value]));
+export async function getProjectMemory(projectPath: string): Promise<Record<string, string>> {
+  return loadStore()[projectPath] ?? {};
 }
 
 /** Résumé compact pour injection dans le prompt système. */

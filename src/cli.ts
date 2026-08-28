@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env node
 import { Command } from "commander";
 import chalk from "chalk";
 import * as readline from "node:readline/promises";
@@ -25,7 +25,15 @@ import { loadMcpServers } from "./mcp/config";
 import { pluginRegistry } from "./plugins/registry";
 import type { ProviderId } from "./providers";
 import type { AgentConfig } from "./types";
-import pkg from "../package.json";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
+// Lu au runtime (pas de `import ... from "../package.json"`) pour que tsc
+// n'inclue pas package.json dans le graphe de compilation — sinon rootDir
+// remonte au dossier racine du repo et casse la structure de sortie dist/.
+const pkgVersion: string = JSON.parse(
+  readFileSync(join(__dirname, "..", "package.json"), "utf-8")
+).version;
 
 // Clés stockées via `deku config` injectées dans l'environnement AVANT tout
 // le reste — comportement identique à un export shell classique pour les
@@ -44,7 +52,7 @@ const PROVIDER_LABEL: Record<ProviderId, string> = {
 program
   .name("deku")
   .description("Deku Agent — agent de développement autonome pour Termux")
-  .version(pkg.version, "--version", "Affiche la version installée")
+  .version(pkgVersion, "--version", "Affiche la version installée")
   .argument("[objectif]", "Objectif à réaliser (sinon session interactive)")
   .option("--provider <provider>", "openrouter | gemini | groq | openai (défaut: dernier configuré via /config)")
   .option("--model <model>", "Modèle à utiliser (défaut: dernier configuré via /config)")

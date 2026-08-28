@@ -2,9 +2,15 @@
 # Installateur Deku Agent — Termux et Linux/macOS.
 # Usage :
 #   curl -fsSL https://raw.githubusercontent.com/Deku0019523f/Deku-Agent/main/scripts/install.sh | bash
+#
+# Runtime : Node.js (>=18). Bun n'est PAS utilisé : le binaire officiel de
+# Bun n'est pas compilé en PIE et ne peut pas s'exécuter sur Android/Termux
+# (voir https://github.com/oven-sh/bun/issues/28924). Node fonctionne
+# nativement sur Termux (paquet `nodejs` officiel), sans chroot ni proot.
 set -euo pipefail
 
 REPO_URL="https://github.com/Deku0019523f/Deku-Agent.git"
+MIN_NODE_MAJOR=18
 
 info() { printf "\033[36m[info]\033[0m %s\n" "$1"; }
 ok()   { printf "\033[32m[ok]\033[0m %s\n" "$1"; }
@@ -45,20 +51,35 @@ if ! command -v git >/dev/null 2>&1; then
 fi
 
 # ------------------------------------------------------------------
-# Prérequis : Bun
+# Prérequis : Node.js >= 18
 # ------------------------------------------------------------------
-if ! command -v bun >/dev/null 2>&1; then
-  info "Bun absent, installation..."
-  curl -fsSL https://bun.sh/install | bash
-  # bun s'installe dans ~/.bun/bin, pas garanti d'être déjà dans PATH pour ce shell
-  export PATH="$HOME/.bun/bin:$PATH"
-  if ! command -v bun >/dev/null 2>&1; then
-    err "Bun installé mais introuvable dans le PATH. Ouvre un nouveau terminal (ou 'source ~/.bashrc') puis relance ce script."
+node_major_version() {
+  command -v node >/dev/null 2>&1 && node -e 'console.log(process.versions.node.split(".")[0])' 2>/dev/null || echo 0
+}
+
+if [[ "$(node_major_version)" -lt "$MIN_NODE_MAJOR" ]]; then
+  if command -v node >/dev/null 2>&1; then
+    info "Node.js présent mais trop ancien ($(node --version)), mise à niveau..."
+  else
+    info "Node.js absent, installation..."
+  fi
+  if [[ "$IS_TERMUX" == true ]]; then
+    pkg install -y nodejs
+  elif command -v apt >/dev/null 2>&1; then
+    sudo apt update -y && sudo apt install -y nodejs npm
+  elif command -v brew >/dev/null 2>&1; then
+    brew install node
+  else
+    err "Node.js introuvable et impossible à installer automatiquement. Installe Node.js >= $MIN_NODE_MAJOR manuellement (https://nodejs.org) puis relance ce script."
     exit 1
   fi
-  ok "Bun installé ($(bun --version))."
+  if [[ "$(node_major_version)" -lt "$MIN_NODE_MAJOR" ]]; then
+    err "Échec de l'installation de Node.js >= $MIN_NODE_MAJOR. Installe-le manuellement puis relance ce script."
+    exit 1
+  fi
+  ok "Node.js installé ($(node --version))."
 else
-  ok "Bun déjà présent ($(bun --version))."
+  ok "Node.js déjà présent ($(node --version))."
 fi
 
 # ------------------------------------------------------------------
@@ -79,11 +100,20 @@ else
 fi
 
 # ------------------------------------------------------------------
-# Dépendances
+# Dépendances + build (TypeScript -> dist/*.js)
 # ------------------------------------------------------------------
-info "Installation des dépendances (bun install)..."
-(cd "$INSTALL_DIR" && bun install --silent)
+info "Installation des dépendances (npm install)..."
+rm -rf "$INSTALL_DIR/node_modules"  # évite tout résidu d'une install Bun précédente
+(cd "$INSTALL_DIR" && npm install --no-audit --no-fund --silent)
 ok "Dépendances installées."
+
+info "Compilation (npm run build)..."
+(cd "$INSTALL_DIR" && npm run build --silent)
+if [[ ! -f "$INSTALL_DIR/dist/cli.js" ]]; then
+  err "La compilation n'a pas produit dist/cli.js. Essaie manuellement : cd $INSTALL_DIR && npm run build"
+  exit 1
+fi
+ok "Compilation terminée."
 
 # ------------------------------------------------------------------
 # Lanceur `deku`
@@ -93,7 +123,7 @@ LAUNCHER="$BIN_DIR/deku"
 
 cat > "$LAUNCHER" << LAUNCHER_EOF
 #!/usr/bin/env bash
-exec bun run "$INSTALL_DIR/src/cli.ts" "\$@"
+exec node "$INSTALL_DIR/dist/cli.js" "\$@"
 LAUNCHER_EOF
 chmod +x "$LAUNCHER"
 ok "Lanceur créé à $LAUNCHER"
@@ -113,10 +143,10 @@ fi
 # Tests de fumée
 # ------------------------------------------------------------------
 info "Tests de fumée..."
-if "$LAUNCHER" --version >/dev/null 2>&1; then
-  ok "deku --version fonctionne."
+if VERSION_OUTPUT="$("$LAUNCHER" --version 2>&1)"; then
+  ok "deku --version -> $VERSION_OUTPUT"
 else
-  err "Le lanceur 'deku' ne démarre pas correctement. Essaie manuellement : bun run $INSTALL_DIR/src/cli.ts"
+  err "Le lanceur 'deku' ne démarre pas correctement (sortie : $VERSION_OUTPUT). Essaie manuellement : node $INSTALL_DIR/dist/cli.js"
   exit 1
 fi
 

@@ -55,7 +55,7 @@ export function createOpenAICompatibleProvider(config: {
         throw new ProviderError(config.id, `HTTP ${res.status}: ${text}`);
       }
 
-      const data = await res.json();
+      const data = (await res.json()) as any;
       const choice = data.choices?.[0];
       if (!choice) {
         throw new ProviderError(config.id, "Réponse vide (pas de choices[])");

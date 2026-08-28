@@ -65,7 +65,7 @@ export const geminiProvider: LLMProvider = {
       throw new ProviderError("gemini", `HTTP ${res.status}: ${text}`);
     }
 
-    const data = await res.json();
+    const data = (await res.json()) as any;
     const candidate = data.candidates?.[0];
     if (!candidate) {
       throw new ProviderError("gemini", "Réponse vide (pas de candidates[])");
