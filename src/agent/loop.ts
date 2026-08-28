@@ -232,6 +232,19 @@ async function runAgentLoopInner(
           return;
         }
       }
+
+      // Sans ce message, l'historique se termine par le tour assistant du
+      // plan (rôle "model" côté Gemini) — Gemini rejette explicitement
+      // toute requête qui se termine par un tour du modèle
+      // ("Requests ending with a model turn are not supported"). Un tour
+      // utilisateur explicite de lancement règle ça pour tous les
+      // providers, et est sauvegardé donc présent aussi après --resume.
+      const kickoffMessage: Message = {
+        role: "user",
+        content: "Le plan est validé, commence l'exécution.",
+      };
+      messages.push(kickoffMessage);
+      await saveMessage(sessionId, kickoffMessage);
     }
 
   // Suivi anti-boucle-d'échec : signature du dernier tool_call en échec
