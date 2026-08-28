@@ -1,16 +1,14 @@
 import chalk from "chalk";
 
-/** Emblème ASCII original (losange stylisé), dans le même esprit visuel que les TUI d'agents modernes. */
+/** Logo texte "DEKU" en gros caractères ASCII (police bloc 5x7), comme demandé. */
 const LOGO = [
-  "      @@@@@@      ",
-  "    @@@@@@@@@@    ",
-  "   @@@@@@@@@@@@   ",
-  "  @@@@  @@  @@@@  ",
-  " @@@@    @    @@@@ ",
-  "  @@@@  @@  @@@@  ",
-  "   @@@@@@@@@@@@   ",
-  "    @@@@@@@@@@    ",
-  "      @@@@@@      ",
+  "####.  #####  #...#  #...#",
+  "#...#  #....  #..#.  #...#",
+  "#...#  #....  #.#..  #...#",
+  "#...#  ####.  ##...  #...#",
+  "#...#  #....  #.#..  #...#",
+  "#...#  #....  #..#.  #...#",
+  "####.  #####  #...#  .###.",
 ];
 
 export function printSplash(cwd: string): void {

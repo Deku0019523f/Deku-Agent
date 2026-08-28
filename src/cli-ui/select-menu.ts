@@ -20,8 +20,25 @@ export type SelectResult =
   | { kind: "custom" } // l'utilisateur a choisi l'entrée "saisie manuelle"
   | { kind: "cancel" };
 
-const MAX_VISIBLE = 10;
+const ABSOLUTE_MAX_VISIBLE = 15;
+const MIN_VISIBLE = 3;
 const ESC_TIMEOUT_MS = 40;
+
+/** Retire les codes couleur ANSI pour mesurer la largeur RÉELLE affichée d'une ligne. */
+function stripAnsi(s: string): string {
+  // eslint-disable-next-line no-control-regex
+  return s.replace(/\x1b\[[0-9;]*m/g, "");
+}
+
+/** Nombre de lignes TERMINAL (physiques) qu'occupe une ligne logique, vu le wrap. */
+function rowsForLine(line: string, columns: number): number {
+  const width = stripAnsi(line).length;
+  return Math.max(1, Math.ceil(width / Math.max(1, columns)));
+}
+
+function totalRows(lines: string[], columns: number): number {
+  return lines.reduce((sum, line) => sum + rowsForLine(line, columns), 0);
+}
 
 /**
  * Menu déroulant avec recherche live et navigation flèches, rendu en place
@@ -55,41 +72,68 @@ export function selectMenu(options: SelectOptions): Promise<SelectResult> {
     }
 
     function render() {
+      const columns = process.stdout.columns || 80;
+      const rows = process.stdout.rows || 24;
       const matches = filtered();
+
+      // Lignes fixes (en-tête + pied de page), mesurées AVANT de savoir
+      // combien d'items on peut se permettre d'afficher.
+      const headerLines: string[] = [];
+      headerLines.push(chalk.bold(title));
+      if (subtitle) headerLines.push(chalk.dim(subtitle));
+      headerLines.push("");
+      headerLines.push(chalk.dim(`${searchPlaceholder ?? "Rechercher..."} `) + query + chalk.dim("_"));
+      headerLines.push("");
+      const footerLines: string[] = ["", chalk.dim("↑/↓ naviguer · Entrée valider · Échap annuler")];
+
+      const fixedRows = totalRows(headerLines, columns) + totalRows(footerLines, columns);
+      // +1 de marge de sécurité pour ne jamais coller pile au bord de l'écran.
+      const maxVisible = Math.max(MIN_VISIBLE, Math.min(ABSOLUTE_MAX_VISIBLE, rows - fixedRows - 1));
+
       selectedIndex = Math.max(0, Math.min(selectedIndex, matches.length - 1));
-      const visible = matches.slice(0, MAX_VISIBLE);
+      const visible = matches.slice(0, maxVisible);
 
-      const lines: string[] = [];
-      lines.push(chalk.bold(title));
-      if (subtitle) lines.push(chalk.dim(subtitle));
-      lines.push("");
-      lines.push(chalk.dim(`${searchPlaceholder ?? "Rechercher..."} `) + query + chalk.dim("_"));
-      lines.push("");
-
+      const itemLines: string[] = [];
       if (visible.length === 0) {
-        lines.push(chalk.dim("  (aucun résultat)"));
+        itemLines.push(chalk.dim("  (aucun résultat)"));
       } else {
         visible.forEach((item, i) => {
           if (i === selectedIndex) {
-            lines.push(chalk.bgCyan.black(` ❯ ${item.label} `) + (item.hint ? chalk.dim(` ${item.hint}`) : ""));
+            itemLines.push(chalk.bgCyan.black(` ❯ ${item.label} `) + (item.hint ? chalk.dim(` ${item.hint}`) : ""));
           } else {
-            lines.push(`   ${item.label}` + (item.hint ? chalk.dim(` ${item.hint}`) : ""));
+            itemLines.push(`   ${item.label}` + (item.hint ? chalk.dim(` ${item.hint}`) : ""));
           }
         });
       }
       if (matches.length > visible.length) {
-        lines.push(chalk.dim(`   … ${matches.length - visible.length} de plus (affine la recherche)`));
+        itemLines.push(chalk.dim(`   … ${matches.length - visible.length} de plus (affine la recherche)`));
       }
-      lines.push("");
-      lines.push(chalk.dim("↑/↓ naviguer · Entrée valider · Échap annuler"));
 
+      const lines = [...headerLines, ...itemLines, ...footerLines];
+
+      // Efface intégralement le bloc précédent (en lignes PHYSIQUES, pas
+      // logiques) avant de redessiner — indispensable dès qu'une ligne
+      // dépasse la largeur du terminal et wrap sur plusieurs rangées
+      // (cas courant sur écran de téléphone étroit), sinon le curseur
+      // remonte au mauvais endroit et les anciens rendus s'empilent au
+      // lieu d'être remplacés.
       if (previousLineCount > 0) {
-        process.stdout.write(`\x1b[${previousLineCount}A`);
+        process.stdout.write(`\x1b[${previousLineCount}A\r`);
+        for (let i = 0; i < previousLineCount; i++) {
+          process.stdout.write("\x1b[2K");
+          // \r\n explicite : on ne dépend jamais de la traduction terminal
+          // \n -> \r\n (onlcr), qui peut varier selon l'émulateur/clavier
+          // étendu utilisé (cf. clavier Termux custom vu en capture).
+          if (i < previousLineCount - 1) process.stdout.write("\r\n");
+        }
+        if (previousLineCount > 1) process.stdout.write(`\x1b[${previousLineCount - 1}A`);
+        process.stdout.write("\r");
       }
+
       for (const line of lines) {
-        process.stdout.write(`\x1b[2K\r${line}\n`);
+        process.stdout.write(`${line}\r\n`);
       }
-      previousLineCount = lines.length;
+      previousLineCount = totalRows(lines, columns);
     }
 
     function confirmSelection() {
