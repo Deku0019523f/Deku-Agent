@@ -89,6 +89,28 @@ export const geminiProvider: LLMProvider = {
           }))
         : undefined;
 
+    // Réponse "creuse" : ni texte, ni appel d'outil. Cas réels observés
+    // côté Gemini : finishReason "MALFORMED_FUNCTION_CALL" (le modèle a
+    // essayé d'appeler un outil mais Gemini a rejeté le format en
+    // interne), "SAFETY" (contenu bloqué), "RECITATION", "OTHER". Sans ce
+    // garde-fou, une telle réponse était silencieusement traitée comme
+    // "tâche terminée" — l'agent s'arrêtait en prétendant avoir fini
+    // alors qu'il n'avait rien fait. On lève une erreur explicite à la
+    // place : elle remonte dans sendWithRetry (retry utile en particulier
+    // pour MALFORMED_FUNCTION_CALL, souvent transitoire) et, si l'échec
+    // persiste, s'affiche clairement à l'utilisateur au lieu d'un faux
+    // succès silencieux.
+    if (!textPart && !tool_calls) {
+      const reason = candidate.finishReason ?? "raison inconnue";
+      const safety = candidate.safetyRatings
+        ? ` | safetyRatings: ${JSON.stringify(candidate.safetyRatings)}`
+        : "";
+      throw new ProviderError(
+        "gemini",
+        `Réponse vide du modèle (finishReason: ${reason}${safety}). Ni texte ni appel d'outil produit.`
+      );
+    }
+
     const message: Message = {
       role: "assistant",
       content: textPart,
